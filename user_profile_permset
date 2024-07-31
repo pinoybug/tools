@@ -1,0 +1,70 @@
+// Query Users with Profiles
+List<User> users = [SELECT Id, Name, Profile.Name FROM User];
+
+// Query PermissionSetAssignments
+List<PermissionSetAssignment> psa = [SELECT AssigneeId, PermissionSetId, PermissionSet.Label FROM PermissionSetAssignment];
+
+// Query PermissionSets with PermissionSetGroups
+Map<Id, PermissionSet> permissionSetMap = new Map<Id, PermissionSet>([
+    SELECT Id, Label, PermissionSetGroupId FROM PermissionSet WHERE PermissionSetGroupId != null
+]);
+
+// Query PermissionSetGroups
+Map<Id, PermissionSetGroup> permissionSetGroupMap = new Map<Id, PermissionSetGroup>([
+    SELECT Id, DeveloperName FROM PermissionSetGroup
+]);
+
+// Combine and process the data
+Map<Id, Map<String, Object>> userMap = new Map<Id, Map<String, Object>>();
+
+for (User u : users) {
+    Map<String, Object> details = new Map<String, Object>();
+    details.put('Name', u.Name);
+    details.put('Profile', u.Profile.Name);
+    userMap.put(u.Id, details);
+}
+
+for (PermissionSetAssignment p : psa) {
+    if (userMap.containsKey(p.AssigneeId)) {
+        List<String> psNames = (List<String>)userMap.get(p.AssigneeId).get('PermissionSets');
+        if (psNames == null) psNames = new List<String>();
+        psNames.add(p.PermissionSet.Label);
+        userMap.get(p.AssigneeId).put('PermissionSets', psNames);
+
+        // Add Permission Set Group if exists
+        if (permissionSetMap.containsKey(p.PermissionSetId)) {
+            Id psgId = permissionSetMap.get(p.PermissionSetId).PermissionSetGroupId;
+            if (psgId != null && permissionSetGroupMap.containsKey(psgId)) {
+                List<String> psgNames = (List<String>)userMap.get(p.AssigneeId).get('PermissionSetGroups');
+                if (psgNames == null) psgNames = new List<String>();
+                psgNames.add(permissionSetGroupMap.get(psgId).DeveloperName);
+                userMap.get(p.AssigneeId).put('PermissionSetGroups', psgNames);
+            }
+        }
+    }
+}
+
+// Generate CSV data
+String csv = 'UserId,UserName,Profile,PermissionSets,PermissionSetGroups\n';
+for (Id userId : userMap.keySet()) {
+    Map<String, Object> details = userMap.get(userId);
+    String permissionSets = (details.containsKey('PermissionSets')) ? String.join((List<String>)details.get('PermissionSets'), ';') : '';
+    String permissionSetGroups = (details.containsKey('PermissionSetGroups')) ? String.join((List<String>)details.get('PermissionSetGroups'), ';') : '';
+    csv += userId + ',' + details.get('Name') + ',' + details.get('Profile') + ',' + permissionSets + ',' + permissionSetGroups + '\n';
+}
+
+Blob csvBlob = Blob.valueOf(csv);
+String fileName = 'User_Permission_Report.csv';
+
+Messaging.EmailFileAttachment attachment = new Messaging.EmailFileAttachment();
+attachment.setFileName(fileName);
+attachment.setBody(csvBlob);
+
+// Email message to send the report
+Messaging.SingleEmailMessage mail = new Messaging.SingleEmailMessage();
+mail.setToAddresses(new String[] { UserInfo.getUserEmail() });
+mail.setSubject('User Permission Report');
+mail.setPlainTextBody('Please find the attached user permission report.');
+mail.setFileAttachments(new Messaging.EmailFileAttachment[] { attachment });
+
+Messaging.sendEmail(new Messaging.SingleEmailMessage[] { mail });
